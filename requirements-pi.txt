@@ -1,0 +1,5 @@
+tensorflow-lite-runtime # Ensure correct version/wheel for Pi
+opencv-python # Ensure correct version/wheel for Pi
+numpy
+RPi.GPIO
+picamera # Or whatever camera interface you use
