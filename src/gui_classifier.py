@@ -1,132 +1,162 @@
-import tkinter as tk
-from tkinter import filedialog, Label, Button
-from PIL import Image, ImageTk
+import streamlit as st
+from PIL import Image
 import tensorflow as tf
 import numpy as np
 import os
 
 # --- Configuration ---
-MODEL_PATH = '../models/waste_classifier.h5'
+# Update the model path to use absolute path
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(os.path.dirname(CURRENT_DIR), 'models', 'waste_classifier.h5')
 IMG_WIDTH, IMG_HEIGHT = 224, 224
-# IMPORTANT: CLASS_NAMES order MUST match the order used during training.
-# You can get this from train_generator.class_indices after training.
 CLASS_NAMES = ['metal', 'organic', 'paper', 'plastic']
 
-class WasteClassifierGUI:
-    def __init__(self, master):
-        self.master = master
-        master.title("Waste Classification Prototype")
+# Custom CSS to make it more attractive
+st.markdown("""
+<style>
+.main {
+    padding: 2rem;
+}
+.title {
+    color: #2c3e50;
+    text-align: center;
+}
+.prediction {
+    padding: 1rem;
+    border-radius: 5px;
+    margin: 1rem 0;
+}
+.prediction-high {
+    background-color: #d4edda;
+    border: 1px solid #c3e6cb;
+    color: #155724;
+}
+.prediction-low {
+    background-color: #fff3cd;
+    border: 1px solid #ffeeba;
+    color: #856404;
+}
+</style>
+""", unsafe_allow_html=True)
 
-        self.model = self.load_model()
-        self.current_image_path = None
-
-        # --- GUI Elements ---
-        self.label_title = Label(master, text="Upload Waste Image for Classification", font=("Arial", 16))
-        self.label_title.pack(pady=10)
-
-        self.btn_upload = Button(master, text="Upload Image", command=self.upload_image, font=("Arial", 12))
-        self.btn_upload.pack(pady=5)
-
-        self.image_panel = Label(master) # To display the uploaded image
-        self.image_panel.pack(pady=10)
-
-        self.label_result = Label(master, text="Prediction: N/A", font=("Arial", 14), fg="blue")
-        self.label_result.pack(pady=5)
-
-        self.label_confidence = Label(master, text="Confidence: N/A", font=("Arial", 12))
-        self.label_confidence.pack(pady=5)
-
-        # Pre-load a placeholder or explain no image is loaded
-        self.display_placeholder()
-
-    def load_model(self):
-        """Loads the pre-trained TensorFlow model."""
-        try:
-            print("Loading model for GUI...")
-            model = tf.keras.models.load_model(MODEL_PATH)
-            print("Model loaded successfully.")
-            return model
-        except Exception as e:
-            print(f"Error loading model: {e}")
-            self.label_result.config(text="Error: Model not found or loaded.", fg="red")
+# --- Functions ---
+@st.cache_resource
+def load_model():
+    """Load and cache the model"""
+    try:
+        if not os.path.exists(MODEL_PATH):
+            st.error(f"Model file not found at: {MODEL_PATH}")
+            st.info("Please ensure you have run train_model.py first and the model file exists in the models directory.")
             return None
+        model = tf.keras.models.load_model(MODEL_PATH)
+        return model
+    except Exception as e:
+        st.error(f"Error loading model: {str(e)}")
+        st.info(f"Current working directory: {os.getcwd()}")
+        st.info(f"Looking for model at: {MODEL_PATH}")
+        return None
 
-    def display_placeholder(self):
-        """Displays a simple placeholder when no image is loaded."""
-        try:
-            # Create a simple blank image or a text placeholder
-            placeholder_img = Image.new('RGB', (IMG_WIDTH, IMG_HEIGHT), color='lightgray')
-            placeholder_photo = ImageTk.PhotoImage(placeholder_img)
-            self.image_panel.config(image=placeholder_photo)
-            self.image_panel.image = placeholder_photo # Keep a reference
-        except Exception as e:
-            print(f"Error displaying placeholder: {e}")
+def classify_image(image, model):
+    """Classify the uploaded image"""
+    try:
+        # Preprocess the image
+        img = image.resize((IMG_WIDTH, IMG_HEIGHT))
+        img_array = tf.keras.preprocessing.image.img_to_array(img)
+        img_array = np.expand_dims(img_array, axis=0)
+        img_array /= 255.0
 
-    def upload_image(self):
-        """Opens a file dialog to select an image and displays it."""
-        file_path = filedialog.askopenfilename(
-            initialdir=".",
-            title="Select Image File",
-            filetypes=(("Image files", "*.jpg *.jpeg *.png"), ("All files", "*.*"))
-        )
+        # Make prediction
+        prediction = model.predict(img_array)
+        predicted_class_index = np.argmax(prediction[0])
+        predicted_class = CLASS_NAMES[predicted_class_index]
+        confidence = float(np.max(prediction[0]) * 100)
 
-        if file_path:
-            self.current_image_path = file_path
-            self.display_image(file_path)
-            self.classify_image(file_path)
+        return predicted_class, confidence
+    except Exception as e:
+        st.error(f"Error during classification: {e}")
+        return None, None
 
-    def display_image(self, file_path):
-        """Loads and displays the image in the GUI."""
-        try:
-            img = Image.open(file_path)
-            img = img.resize((IMG_WIDTH, IMG_HEIGHT), Image.LANCZOS) # Use Image.LANCZOS for quality
-            img_tk = ImageTk.PhotoImage(img)
+# --- Main App ---
+def main():
+    # Title and Description
+    st.title("🌍 CleanSort AI")
+    st.markdown("""
+    <p style='text-align: center; color: #666;'>
+    Upload an image of waste material and let AI help you classify it for proper recycling!
+    </p>
+    """, unsafe_allow_html=True)
 
-            self.image_panel.config(image=img_tk)
-            self.image_panel.image = img_tk # Keep a reference to prevent garbage collection
-        except Exception as e:
-            print(f"Error displaying image: {e}")
-            self.label_result.config(text="Error: Could not display image.", fg="red")
+    # Load model
+    model = load_model()
+    if model is None:
+        st.error("⚠️ Please ensure the model file exists and run train_model.py first.")
+        return
 
-    def classify_image(self, file_path):
-        """Classifies the uploaded image using the loaded TensorFlow model."""
-        if self.model is None:
-            self.label_result.config(text="Model not loaded. Cannot classify.", fg="red")
-            return
+    # File uploader
+    uploaded_file = st.file_uploader(
+        "Choose an image...", 
+        type=["jpg", "jpeg", "png"],
+        help="Upload a clear image of the waste item you want to classify"
+    )
 
-        try:
-            # Load the image using Keras utility for consistency with training
-            img = tf.keras.preprocessing.image.load_img(
-                file_path, target_size=(IMG_WIDTH, IMG_HEIGHT)
-            )
-            img_array = tf.keras.preprocessing.image.img_to_array(img)
-            img_array = np.expand_dims(img_array, axis=0) # Create a batch
-            img_array /= 255.0 # Rescale to [0, 1]
+    # Create two columns for layout
+    col1, col2 = st.columns(2)
 
-            # Make prediction
-            prediction = self.model.predict(img_array)
-            predicted_class_index = np.argmax(prediction[0])
-            predicted_class_name = CLASS_NAMES[predicted_class_index]
-            confidence = np.max(prediction[0]) * 100
+    if uploaded_file is not None:
+        # Display the uploaded image
+        image = Image.open(uploaded_file)
+        col1.image(image, caption="Uploaded Image", use_container_width=True)  # Updated parameter
 
-            # Update GUI with results
-            self.label_result.config(text=f"Prediction: {predicted_class_name.upper()}", fg="green")
-            self.label_confidence.config(text=f"Confidence: {confidence:.2f}%")
+        # Add a classify button
+        if col2.button("🔍 Classify Waste"):
+            with st.spinner("Analyzing image..."):
+                predicted_class, confidence = classify_image(image, model)
 
-        except Exception as e:
-            print(f"Error classifying image: {e}")
-            self.label_result.config(text="Error during classification.", fg="red")
-            self.label_confidence.config(text="Confidence: N/A")
+            if predicted_class and confidence:
+                # Display results with custom styling
+                if confidence >= 75:
+                    col2.markdown(f"""
+                    <div class='prediction prediction-high'>
+                        <h3>Classification Result:</h3>
+                        <p>Type: <strong>{predicted_class.upper()}</strong></p>
+                        <p>Confidence: <strong>{confidence:.2f}%</strong></p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    col2.markdown(f"""
+                    <div class='prediction prediction-low'>
+                        <h3>Classification Result:</h3>
+                        <p>Type: <strong>{predicted_class.upper()}</strong></p>
+                        <p>Confidence: <strong>{confidence:.2f}%</strong></p>
+                        <p><em>Note: Low confidence prediction</em></p>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                # Display recycling instructions
+                st.markdown("### ♻️ Recycling Instructions")
+                instructions = {
+                    'metal': "Clean and separate from other materials. Most metal items are highly recyclable!",
+                    'organic': "Compost if possible. Keep separate from non-biodegradable waste.",
+                    'paper': "Keep dry and flatten. Remove any plastic or metal attachments.",
+                    'plastic': "Check the recycling number. Clean and dry before recycling."
+                }
+                st.info(instructions.get(predicted_class, ""))
+
+    # Add information section
+    with st.expander("ℹ️ About This Classifier"):
+        st.markdown("""
+        This waste classifier uses a deep learning model trained on various types of waste materials.
+        It can classify waste into four categories:
+        - 🔧 Metal
+        - 🍂 Organic
+        - 📄 Paper
+        - 🏷️ Plastic
+        
+        For best results:
+        - Use well-lit, clear images
+        - Center the waste item in the image
+        - Use a contrasting background
+        """)
 
 if __name__ == "__main__":
-    # Ensure the models directory exists
-    if not os.path.exists(os.path.dirname(MODEL_PATH)):
-        print(f"Error: Model directory '{os.path.dirname(MODEL_PATH)}' not found.")
-        print("Please run 'train_model.py' first to create the model.")
-    elif not os.path.exists(MODEL_PATH):
-        print(f"Error: Model file '{MODEL_PATH}' not found.")
-        print("Please run 'train_model.py' first to create the model.")
-    else:
-        root = tk.Tk()
-        app = WasteClassifierGUI(root)
-        root.mainloop()
+    main()
